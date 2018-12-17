@@ -12,50 +12,44 @@ object PlotConverter {
   def allPlotNames(model: Model): Seq[String] =
     model.plots.flatMap(_.display).filterNot(_.isEmpty)
 
-
-  def allLocalMapPenNames(model: Model): Seq[(String, Seq[String])] = {
-    val plotList = model.plots.map((cas: Plot) => (cas.display.getOrElse(""), cas.pens.toSeq.map(_.display)))
-    plotList.filterNot(_._1.isEmpty)
+  def allKeyedPenNames(model: Model): Seq[(String, Seq[String])] = {
+    model.plots
+      .map((plot: Plot) => (plot.display.getOrElse(""), plot.pens.toSeq.map(_.display)))
+      .filterNot(_._1.isEmpty)
   }
 
-  def allLocalPenNames(model: Model): Seq[Seq[String]] =
-    model.plots.map(_.pens.toSeq.map(_.display))
-
-  private[fileformat] def determineMapRenames(names: Seq[(String, Seq[String])]): Seq[(String, Seq[(String, String)])] = {
-    names.map(c => (c._1, c._2.groupBy(cas => cas.toUpperCase) // Map[K, Repr]
-      .toSeq
+  private[fileformat] def mapRenameDecision(groupedNames: Seq[(String, Seq[String])]):  Seq[(String, String)] = {
+    groupedNames
       .map {
-        case (upper, originals) => upper -> originals //.distinct // no duplicates
+        case (upper, originals) => upper -> originals
       }
-      .flatMap { // each entry is a groupBy
+      .flatMap {
         case (upper, originals) if originals.length > 1 =>
           // Put lower-case names before uppercase names
           val sortedOriginals = originals.sorted.reverse
           sortedOriginals.zipWithIndex.map {
             case (original, index) if index == 0 => (original, original)
-            case (original, index) => (original, s"${original}_${index}")
+            case (original, index) => {
+              var new_name = s"${original}_${index}"
+              var new_index = index
+              while(groupedNames.map(_._1).contains(new_name.toUpperCase)){
+                new_index = new_index + 1
+                new_name  = s"${original}_${new_index}"
+              }
+              (original, s"${original}_${new_index}")
+            }
           }
         case _ => Seq.empty[(String, String)]
       }
-    )).filterNot(_._2.isEmpty)
+  }
+
+  private[fileformat] def determineMapRenames(names: Seq[(String, Seq[String])]): Seq[(String, Seq[(String, String)])] = {
+    names.map(plotAndPens =>
+        (plotAndPens._1, mapRenameDecision(plotAndPens._2.groupBy(_.toUpperCase).toSeq))).filterNot(_._2.isEmpty)
   }
 
   private[fileformat] def determineRenames(names: Seq[String]): Seq[(String, String)] = {
-    names.groupBy(_.toUpperCase)
-      .toSeq
-      .map {
-        case (upper, originals) => upper -> originals.distinct // no duplicates
-      }
-      .flatMap { // each entry is a groupBy
-        case (upper, originals) if originals.length > 1 =>
-          // Put lower-case names before uppercase names
-          val sortedOriginals = originals.sorted.reverse
-          sortedOriginals.zipWithIndex.map {
-            case (original, index) if index == 0 => (original, original)
-            case (original, index) => (original, s"${original}_${index}")
-          }
-        case _ => Seq.empty[(String, String)]
-      }
+    mapRenameDecision(names.groupBy(_.toUpperCase).toSeq)
   }
 
   private def clarifyProcedureBody(renamePairs: Seq[(String, String)]): String = {
@@ -98,7 +92,7 @@ object PlotConverter {
     val penConversions =
       buildConversionSet("Make pens case-insensitive",
         "_clarify-duplicate-plot-pen-name",
-        determineMapRenames(allLocalMapPenNames(model)).map(_._2).flatten.distinct,
+        determineMapRenames(allKeyedPenNames(model)).map(_._2).flatten.distinct,
         "set-current-plot-pen")
 
     plotConversions ++ penConversions
@@ -122,7 +116,7 @@ class PlotConverter(
 
       override def apply(model: Model, modelPath: Path): ConversionResult = {
         val plotRenames = determineRenames(allPlotNames(model))
-        val penRenames: Seq[(String, Seq[(String,String)])] = determineMapRenames(allLocalMapPenNames(model))
+        val penRenames: Seq[(String, Seq[(String,String)])] = determineMapRenames(allKeyedPenNames(model))
         (plotRenames, penRenames) match {
           case (Seq(), Seq()) => super.apply(model,modelPath)
           case _ => { val conversion = super.apply(model, modelPath)
